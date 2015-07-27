@@ -3,6 +3,7 @@
 \alias{PKI.load.cert}
 \alias{PKI.verifyCA}
 \alias{PKI.pubkey}
+\alias{PKI.get.subject}
 \title{
   Public Key Instraftructure (X509) functions
 }
@@ -14,14 +15,17 @@
   trust.
 
   \code{PKI.pubkey} extracts public key from a certificate.  
+
+  \code{PKI.get.subject} extracts the subject name from the certificate.
 }
 \usage{
-PKI.load.cert(what, format = "PEM", file)
+PKI.load.cert(what, format = c("PEM", "DER"), file)
 PKI.verifyCA(certificate, ca)
 PKI.pubkey(certificate)
+PKI.get.subject(certificate)
 }
 \arguments{
-  \item{what}{string, raw vector or connection to load teh certificate
+  \item{what}{string, raw vector or connection to load the certificate
     from}
   \item{format}{format used to encode the certificate}
   \item{file}{filename to load the certificate from - \code{what} and
@@ -40,6 +44,11 @@ PKI.pubkey(certificate)
   \code{FALSE} otherwise
 
   \code{PKI.pubkey}: public key object
+
+  \code{PKI.get.subject}: string containing the subject information in
+  one-line RFC2253 format but in UTF8 encoding instead of MBS escapes.
+  NOTE: this is experimantal, we may choose to parse the contents and
+  return it in native R form as a named vector instead.
 }
 %\references{
 %}
@@ -55,5 +64,6 @@ PKI.pubkey(certificate)
   my.cert <- PKI.load.cert(readLines(system.file("certs", "demo.crt", package="PKI")))
   PKI.verifyCA(my.cert, ca)
   PKI.pubkey(my.cert)
+  PKI.get.subject(my.cert)
 }
 \keyword{manip}

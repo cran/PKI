@@ -4,6 +4,8 @@
 ##  public key : ASN.1 SEQ(modulus (n) INT, publicExponent (e) INT)
 ##  private key: ver, n, e, d, p, q, d mod (p-1), d mod (q-1), (inv q) mod p [,other primes]
 ##
+## PKCS#8: (BEGIN PUBLIC KEY) - RFC 5208
+##
 ## X.509 SubjectPublicKeyInfo (BEGIN PUBLIC KEY) - RFC 1422
 ##  SEQ(AlgorithmIdentifier:SEQ(OID, param[NULL]), BIT-STR(key - as defined in PKCS#1))
 ##
@@ -16,7 +18,7 @@
 ##  (pkcs-1 1) = rsaEncryption (RFC 3447) --- for use in SubjectPublicKeyInfo
 oid.pkcs.1.rsaEncryption <- as.raw(c(0x2a,0x86,0x48,0x86,0xf7,0x0d,1,1,1))
 
-PKI.load.key <- function(what, format=c("PEM", "DER"), private, file) {
+PKI.load.key <- function(what, format=c("PEM", "DER"), private, file, password="") {
     if (!missing(file) && !missing(what)) stop("what and file are mutually exclusive")
     format <- match.arg(format)
     if (missing(private)) private <- NA
@@ -34,10 +36,12 @@ PKI.load.key <- function(what, format=c("PEM", "DER"), private, file) {
         rm.ln <- which(grepl(":", what, fixed=TRUE) | grepl("\\\\$", what))
         if (length(rm.ln)) what <- what[-rm.ln]
         if (either || private) {
-            i <- grep("-BEGIN RSA PRIVATE KEY-", what, fixed=TRUE)
-            j <- grep("-END RSA PRIVATE KEY-", what, fixed=TRUE)
+            ## Check if this is a private key.
+            i <- grep("-BEGIN (RSA |ENCRYPTED )?PRIVATE KEY-", what)
+            j <- grep("-END (RSA |ENCRYPTED )?PRIVATE KEY-", what)
             if (length(i) >= 1L && length(j) >= 1L && i[1] < j[1]) {
-                what <- base64enc::base64decode(what[(i + 1L):(j - 1L)])
+                ## PEM_read_bio_PrivateKey method takes the base64 encoding with the header.
+                what <- paste(what[i:j], collapse='\n')
                 private <- TRUE
             } else {
                 if (private)
@@ -74,7 +78,7 @@ PKI.load.key <- function(what, format=c("PEM", "DER"), private, file) {
         }
     }
     if (private)
-      .Call(PKI_load_private_RSA, what)
+      .Call(PKI_load_private_RSA, what, password)
     else
       .Call(PKI_load_public_RSA, what)
 }
@@ -107,24 +111,25 @@ PKI.save.key <- function(key, format=c("PEM", "DER"), private=NA, target) {
 
 PKI.genRSAkey <- function(bits=2048L) .Call(PKI_RSAkeygen, bits)
 
-PKI.sign <- function(what, key, hash=c("SHA1", "MD5"), digest) {
+PKI.sign <- function(what, key, hash=c("SHA1", "SHA256", "MD5"), digest) {
   if (!missing(digest) && !missing(what))
     stop("what and digest are mutually exclusive")
   if (missing(digest))
     digest <- PKI.digest(what, hash)
-  hash <- pmatch(hash, c("SHA1", "MD5"))[1]
+  hash <- pmatch(hash, c("SHA1", "SHA256", "MD5"))[1]
   if (is.na(hash)) stop("invalid hash specification")
   .Call(PKI_sign_RSA, digest, hash, key)
 }
 
-PKI.verify <- function(what, signature, key, hash=c("SHA1", "MD5"), digest) {
-  if (!missing(digest) && !missing(what))
-    stop("what and digest are mutually exclusive")
-  if (missing(digest))
-    digest <- PKI.digest(what, hash)
-  hash <- pmatch(hash, c("SHA1", "MD5"))[1]
-  if (is.na(hash)) stop("invalid hash specification")
-  .Call(PKI_verify_RSA, digest, hash, key, signature)
+PKI.verify <- function(what, signature, key, hash=c("SHA1", "SHA256", "MD5"), digest) {
+    if (inherits(key, "X509cert")) key <- PKI.pubkey(key)
+    if (!missing(digest) && !missing(what))
+        stop("what and digest are mutually exclusive")
+    if (missing(digest))
+        digest <- PKI.digest(what, hash)
+    hash <- pmatch(hash, c("SHA1", "SHA256", "MD5"))[1]
+    if (is.na(hash)) stop("invalid hash specification")
+    .Call(PKI_verify_RSA, digest, hash, key, signature)
 }
 
 PKI.mkRSApubkey <- function(modulus, exponent=65537L, format = c("DER", "PEM", "key")) {

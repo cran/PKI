@@ -132,6 +132,7 @@ SEXP PKI_extract_key(SEXP sKey, SEXP sPriv) {
     key = (EVP_PKEY*) R_ExternalPtrAddr(sKey);
     if (!key)
 	Rf_error("NULL key");
+    PKI_init();
     if (EVP_PKEY_type(key->type) != EVP_PKEY_RSA)
 	Rf_error("Sorry only RSA keys are supported at this point");
     rsa = EVP_PKEY_get1_RSA(key);
@@ -178,15 +179,135 @@ SEXP PKI_cert_public_key(SEXP sCert) {
 
 static char buf[8192];
 
-SEXP PKI_encrypt(SEXP what, SEXP sKey) {
+static char cipher_name[32];
+
+static EVP_CIPHER_CTX *get_cipher(SEXP sKey, SEXP sCipher, int enc, int *transient) {
+    EVP_CIPHER_CTX *ctx;
+    PKI_init();
+    if (inherits(sKey, "symmeric.cipher")) {
+	if (transient) transient[0] = 0;
+	return (EVP_CIPHER_CTX*) R_ExternalPtrAddr(sCipher);
+    }	
+    if (TYPEOF(sKey) != RAWSXP && (TYPEOF(sKey) != STRSXP || LENGTH(sKey) < 1))
+	Rf_error("invalid key object");
+    else {
+	const char *cipher, *c_key;
+	int key_len;
+	const EVP_CIPHER *type;
+	if (TYPEOF(sCipher) != STRSXP || LENGTH(sCipher) != 1)
+	    Rf_error("non-RSA key and no cipher is specified");
+	cipher = CHAR(STRING_ELT(sCipher, 0));
+	if (strlen(cipher) > sizeof(cipher_name) - 1)
+	    Rf_error("invalid cipher name");
+	{
+	    char *c = cipher_name;
+	    while (*cipher) {
+		if ((*cipher >= 'a' && *cipher <= 'z') || (*cipher >= '0' && *cipher <= '9'))
+		    *(c++) = *cipher;
+		else if (*cipher >= 'A' && *cipher <= 'Z')
+		    *(c++) = *cipher + 32;
+		cipher++;
+	    }
+	    *c = 0;
+	    cipher = (const char*) cipher_name;
+	}
+	if (!strcmp(cipher, "aes128") || !strcmp(cipher, "aes128cbc"))
+	    type = EVP_aes_128_cbc();
+	else if (!strcmp(cipher, "aes128ecb"))
+	    type = EVP_aes_128_ecb();
+	else if (!strcmp(cipher, "aes128ofb"))
+	    type = EVP_aes_128_ofb();
+	else if (!strcmp(cipher, "aes256") || !strcmp(cipher, "aes256cbc"))
+	    type = EVP_aes_256_cbc();
+	else if (!strcmp(cipher, "aes256ecb"))
+	    type = EVP_aes_256_ecb();
+	else if (!strcmp(cipher, "aes256ofb"))
+	    type = EVP_aes_256_ofb();
+	else if (!strcmp(cipher, "blowfish") || !strcmp(cipher, "bfcbc"))
+	    type = EVP_bf_cbc();
+	else if (!strcmp(cipher, "bfecb"))
+	    type = EVP_bf_ecb();
+	else if (!strcmp(cipher, "bfofb"))
+	    type = EVP_bf_ofb();
+	else if (!strcmp(cipher, "bfcfb"))
+	    type = EVP_bf_cfb();
+	else Rf_error("unknown cipher `%s'", CHAR(STRING_ELT(sCipher, 0)));
+	if (TYPEOF(sKey) == STRSXP) {
+	    c_key = CHAR(STRING_ELT(sKey, 0));
+	    key_len = strlen(c_key);
+	} else {
+	    c_key = (const char*) RAW(sKey);
+	    key_len = LENGTH(sKey);
+	}
+	if (key_len < EVP_CIPHER_key_length(type))
+	    Rf_error("key is too short (%d bytes) for the cipher - need %d bytes", key_len, EVP_CIPHER_key_length(type));
+	ctx = (EVP_CIPHER_CTX*) malloc(sizeof(*ctx));
+	if (!ctx)
+	    Rf_error("cannot allocate memory for cipher");
+	if (!EVP_CipherInit(ctx, type, (unsigned char*) c_key, 0, enc)) {
+	    free(ctx);
+	    Rf_error("%s", ERR_error_string(ERR_get_error(), NULL));
+	}
+	if (transient) transient[0] = 1;
+	return ctx;
+    }
+}
+
+static void PKI_free_cipher(SEXP sCipher) {
+    EVP_CIPHER_CTX *ctx = (EVP_CIPHER_CTX*) R_ExternalPtrAddr(sCipher);
+    if (ctx) {
+	EVP_CIPHER_CTX_cleanup(ctx);
+	free(ctx);
+    }
+}
+
+SEXP PKI_sym_cipher(SEXP sKey, SEXP sCipher, SEXP sEncrypt) {
+    SEXP res;
+    int transient_cipher = 0;
+    int do_enc = (asInteger(sEncrypt) != 0) ? 1 : 0;
+    EVP_CIPHER_CTX *ctx = get_cipher(sKey, sCipher, do_enc, &transient_cipher);
+    if (!transient_cipher)
+	return sCipher;
+    res = PROTECT(R_MakeExternalPtr(ctx, R_NilValue, R_NilValue));
+    R_RegisterCFinalizerEx(res, PKI_free_cipher, TRUE);
+    setAttrib(res, install("class"), mkString("symmetric.cipher"));
+    UNPROTECT(1);
+    return res;    
+}
+
+SEXP PKI_encrypt(SEXP what, SEXP sKey, SEXP sCipher) {
     SEXP res;
     EVP_PKEY *key;
     RSA *rsa;
     int len;
     if (TYPEOF(what) != RAWSXP)
 	Rf_error("invalid payload to sign - must be a raw vector");
-    if (!inherits(sKey, "public.key") && !inherits(sKey, "private.key"))
-	Rf_error("invalid key object");
+    if (!inherits(sKey, "public.key") && !inherits(sKey, "private.key")) {
+	int transient_cipher = 0;
+	EVP_CIPHER_CTX *ctx = get_cipher(sKey, sCipher, 1, &transient_cipher);
+	int block_len = EVP_CIPHER_CTX_block_size(ctx);
+	int padding = LENGTH(what) % block_len;
+	/* Note: padding is always required, so if the last block is full, there
+	   must be an extra block added at the end */
+	padding = block_len - padding;
+	/* FIXME: ctx will leak on alloc errors for transient ciphers - wrap them first */
+	res = allocVector(RAWSXP, len = (LENGTH(what) + padding));
+	if (!EVP_CipherUpdate(ctx, RAW(res), &len, RAW(what), LENGTH(what))) {
+	    if (transient_cipher) {
+		EVP_CIPHER_CTX_cleanup(ctx);
+		free(ctx);
+	    }
+	    Rf_error("%s", ERR_error_string(ERR_get_error(), NULL));
+	}
+	if (len < LENGTH(res))
+	    EVP_CipherFinal(ctx, RAW(res) + len, &len);
+	if (transient_cipher) {
+	    EVP_CIPHER_CTX_cleanup(ctx);
+	    free(ctx);
+	}
+	return res;
+    }
+
     key = (EVP_PKEY*) R_ExternalPtrAddr(sKey);
     if (!key)
 	Rf_error("NULL key");
@@ -203,15 +324,36 @@ SEXP PKI_encrypt(SEXP what, SEXP sKey) {
     return res;
 }
 
-SEXP PKI_decrypt(SEXP what, SEXP sKey) {
+SEXP PKI_decrypt(SEXP what, SEXP sKey, SEXP sCipher) {
     SEXP res;
     EVP_PKEY *key;
     RSA *rsa;
     int len;
     if (TYPEOF(what) != RAWSXP)
 	Rf_error("invalid payload to sign - must be a raw vector");
-    if (!inherits(sKey, "private.key"))
-	Rf_error("invalid key object");
+    PKI_init();
+    if (!inherits(sKey, "private.key")) {
+	int transient_cipher = 0, fin = 0;
+	EVP_CIPHER_CTX *ctx = get_cipher(sKey, sCipher, 0, &transient_cipher);
+	/* FIXME: ctx will leak on alloc errors for transient ciphers - wrap them first */
+	res = allocVector(RAWSXP, len = LENGTH(what));
+	if (!EVP_CipherUpdate(ctx, RAW(res), &len, RAW(what), LENGTH(what))) {
+	    if (transient_cipher) {
+		EVP_CIPHER_CTX_cleanup(ctx);
+		free(ctx);
+	    }
+	    Rf_error("%s", ERR_error_string(ERR_get_error(), NULL));
+	}
+	if (EVP_CipherFinal(ctx, RAW(res) + len, &fin))
+	    len += fin;
+	if (len < LENGTH(res))
+	    SETLENGTH(res, len);
+	if (transient_cipher) {
+	    EVP_CIPHER_CTX_cleanup(ctx);
+	    free(ctx);
+	}
+	return res;
+    }
     key = (EVP_PKEY*) R_ExternalPtrAddr(sKey);
     if (!key)
 	Rf_error("NULL key");
@@ -229,21 +371,36 @@ SEXP PKI_decrypt(SEXP what, SEXP sKey) {
 }
 
 #define PKI_SHA1 1
-#define PKI_MD5  2
+#define PKI_SHA256 2
+#define PKI_MD5  3
 
-SEXP PKI_digest(SEXP what, SEXP sMD) {
+SEXP PKI_digest(SEXP sWhat, SEXP sMD) {
     SEXP res;
     unsigned char hash[32]; /* really, at most 20 bytes are needed */
     int len, md = asInteger(sMD);
-    if (TYPEOF(what) != RAWSXP)
-	Rf_error("what must be a raw vector");
+    const unsigned char *what;
+    int what_len;
+    PKI_init();
+    if (TYPEOF(sWhat) == RAWSXP) {
+	what = (const unsigned char*) RAW(sWhat);
+	what_len = LENGTH(sWhat);
+    } else if (TYPEOF(sWhat) == STRSXP) {
+	if (LENGTH(sWhat) < 1) return allocVector(RAWSXP, 0); /* good? */
+	what = (const unsigned char*) CHAR(STRING_ELT(sWhat, 0));
+	what_len = strlen((const char*) what);
+    } else
+	Rf_error("what must be a string or a raw vector");
     switch (md) {
     case PKI_SHA1:
-	SHA1((const unsigned char*) RAW(what), LENGTH(what), hash);
+	SHA1(what, what_len, hash);
 	len = SHA_DIGEST_LENGTH;
 	break;
+    case PKI_SHA256:
+  SHA256(what, what_len, hash);
+  len = SHA256_DIGEST_LENGTH;
+  break;
     case PKI_MD5:
-	MD5((const unsigned char*) RAW(what), LENGTH(what), hash);
+	MD5(what, what_len, hash);
 	len = MD5_DIGEST_LENGTH;
 	break;
     default:
@@ -257,27 +414,40 @@ SEXP PKI_digest(SEXP what, SEXP sMD) {
 
 SEXP PKI_sign_RSA(SEXP what, SEXP sMD, SEXP sKey) {
     SEXP res;
-    int md = asInteger(sMD);
+    int md = asInteger(sMD), type;
     EVP_PKEY *key;
     RSA *rsa;
     unsigned int siglen = sizeof(buf);
-    if (md != PKI_MD5 && md != PKI_SHA1)
-	Rf_error("unsupported hash type");
+  switch (md) {
+    case PKI_MD5:
+      type = NID_md5;
+      break;
+    case PKI_SHA1:
+      type = NID_sha1;
+      break;
+    case PKI_SHA256:
+      type = NID_sha256;
+      break;
+    default:
+      Rf_error("unsupported hash type");
+  }
     if (TYPEOF(what) != RAWSXP ||
 	(md == PKI_MD5 && LENGTH(what) != MD5_DIGEST_LENGTH) ||
-	(md == PKI_SHA1 && LENGTH(what) != SHA_DIGEST_LENGTH))
+	(md == PKI_SHA1 && LENGTH(what) != SHA_DIGEST_LENGTH) ||
+  (md == PKI_SHA256 && LENGTH(what) != SHA256_DIGEST_LENGTH))
 	Rf_error("invalid hash");
     if (!inherits(sKey, "private.key"))
 	Rf_error("key must be RSA private key");
     key = (EVP_PKEY*) R_ExternalPtrAddr(sKey);
     if (!key)
 	Rf_error("NULL key");
+    PKI_init();
     if (EVP_PKEY_type(key->type) != EVP_PKEY_RSA)
 	Rf_error("key must be RSA private key");
     rsa = EVP_PKEY_get1_RSA(key);
     if (!rsa)
 	Rf_error("%s", ERR_error_string(ERR_get_error(), NULL));
-    if (RSA_sign((md == PKI_MD5) ? NID_md5 : NID_sha1,
+    if (RSA_sign(type,
 		 (const unsigned char*) RAW(what), LENGTH(what),
 		 (unsigned char *) buf, &siglen, rsa) != 1)
 	Rf_error("%s", ERR_error_string(ERR_get_error(), NULL));
@@ -287,45 +457,70 @@ SEXP PKI_sign_RSA(SEXP what, SEXP sMD, SEXP sKey) {
 }
 
 SEXP PKI_verify_RSA(SEXP what, SEXP sMD, SEXP sKey, SEXP sig) {
-    int md = asInteger(sMD);
+    int md = asInteger(sMD), type;
     EVP_PKEY *key;
     RSA *rsa;
-    if (md != PKI_MD5 && md != PKI_SHA1)
-	Rf_error("unsupported hash type");
+    switch (md) {
+    case PKI_MD5:
+  type = NID_md5;
+  break;
+    case PKI_SHA1:
+  type = NID_sha1;
+  break;
+    case PKI_SHA256:
+  type = NID_sha256;
+  break;
+    default:
+  Rf_error("unsupported hash type");
+  }
     if (TYPEOF(what) != RAWSXP ||
-	(md == PKI_MD5 && LENGTH(what) != MD5_DIGEST_LENGTH) ||
-	(md == PKI_SHA1 && LENGTH(what) != SHA_DIGEST_LENGTH))
+  (md == PKI_MD5 && LENGTH(what) != MD5_DIGEST_LENGTH) ||
+  (md == PKI_SHA1 && LENGTH(what) != SHA_DIGEST_LENGTH) ||
+  (md == PKI_SHA256 && LENGTH(what) != SHA256_DIGEST_LENGTH))
 	Rf_error("invalid hash");
-    if (!inherits(sKey, "public.key"))
-	Rf_error("key must be RSA public key");
+    if (!inherits(sKey, "public.key") && !inherits(sKey, "private.key"))
+	Rf_error("key must be RSA public or private key");
     key = (EVP_PKEY*) R_ExternalPtrAddr(sKey);
     if (!key)
 	Rf_error("NULL key");
     if (EVP_PKEY_type(key->type) != EVP_PKEY_RSA)
-	Rf_error("key must be RSA public key");
+	Rf_error("key must be RSA public or private key");
     rsa = EVP_PKEY_get1_RSA(key);
     if (!rsa)
 	Rf_error("%s", ERR_error_string(ERR_get_error(), NULL));
     return
 	ScalarLogical( /* FIXME: sig is not const in RSA_verify - that is odd so in theory in may modify sig ... */
-		      (RSA_verify((md == PKI_MD5) ? NID_md5 : NID_sha1,
+		      (RSA_verify(type,
 				  (const unsigned char*) RAW(what), LENGTH(what),
 				  (unsigned char *) RAW(sig), LENGTH(sig), rsa) == 1)
 		      ? TRUE : FALSE);
 }
 
-SEXP PKI_load_private_RSA(SEXP what) {
-    EVP_PKEY *key;
-    RSA *rsa = 0;
-    const unsigned char *ptr;
-    if (TYPEOF(what) != RAWSXP)
-	Rf_error("key must be a raw vector");
-    ptr = (const unsigned char *) RAW(what);
-    rsa = d2i_RSAPrivateKey(&rsa, &ptr, LENGTH(what));
-    if (!rsa)
-	Rf_error("%s", ERR_error_string(ERR_get_error(), NULL));
-    key = EVP_PKEY_new();
-    EVP_PKEY_assign_RSA(key, rsa);
+SEXP PKI_load_private_RSA(SEXP what, SEXP sPassword) {
+    EVP_PKEY *key = 0;
+    BIO *bio_mem;
+    if (TYPEOF(sPassword) != STRSXP || LENGTH(sPassword) != 1)
+	Rf_error("Password must be a string");
+    PKI_init();
+    if (TYPEOF(what) == RAWSXP) { /* assuming binary DER format */
+	RSA *rsa = 0;
+	const unsigned char *ptr;
+	ptr = (const unsigned char *) RAW(what);
+	rsa = d2i_RSAPrivateKey(&rsa, &ptr, LENGTH(what));
+	if (!rsa)
+	    Rf_error("%s", ERR_error_string(ERR_get_error(), NULL));
+	key = EVP_PKEY_new();
+	EVP_PKEY_assign_RSA(key, rsa);
+    } else if (TYPEOF(what) == STRSXP && LENGTH(what)) {
+	SEXP b64Key = STRING_ELT(what, 0);
+	bio_mem = BIO_new_mem_buf((void *) CHAR(b64Key), -1);
+	key = PEM_read_bio_PrivateKey(bio_mem, 0, 0, (void*) CHAR(STRING_ELT(sPassword, 0)));
+	BIO_free(bio_mem);
+	if (!key)
+	    Rf_error("%s", ERR_error_string(ERR_get_error(), NULL));
+    } else
+	Rf_error("Private key must be a character or raw vector");
+
     return wrap_EVP_PKEY(key, PKI_KT_PRIVATE);
 }
 
@@ -335,6 +530,7 @@ SEXP PKI_load_public_RSA(SEXP what) {
     const unsigned char *ptr;
     if (TYPEOF(what) != RAWSXP)
 	Rf_error("key must be a raw vector");
+    PKI_init();
     ptr = (const unsigned char *) RAW(what);
     rsa = d2i_RSA_PUBKEY(&rsa, &ptr, LENGTH(what));
     if (!rsa)
@@ -350,6 +546,7 @@ SEXP PKI_RSAkeygen(SEXP sBits) {
     int bits = asInteger(sBits);
     if (bits < 512)
 	Rf_error("invalid key size");
+    PKI_init();
     rsa = RSA_generate_key(bits, 65537, 0, 0);
     if (!rsa)
 	Rf_error("%s", ERR_error_string(ERR_get_error(), NULL));
@@ -375,8 +572,9 @@ SEXP PKI_sign(SEXP what, SEXP sKey, SEXP sMD, SEXP sPad) {
     size_t sl;
     if (TYPEOF(what) != RAWSXP)
 	Rf_error("invalid payload to sign - must be a raw vector");
-    if (!inherits(sKey, "public.key"))
-	Rf_error("invalid key object");
+    if (!inherits(sKey, "private.key"))
+	Rf_error("key must be RSA private key");
+    PKI_init();
     mdt = asInteger(sMD);
     padt = asInteger(sPad);
     key = (EVP_PKEY*) R_ExternalPtrAddr(sKey);
@@ -413,3 +611,28 @@ SEXP PKI_sign(SEXP what, SEXP sKey, SEXP sMD, SEXP sPad) {
 }
 
 #endif
+
+/* Return the Subject of an X509 Certificate by wrapping the OpenSSL X509_get_subject_name() function. */
+SEXP PKI_get_subject(SEXP sCert) {
+    SEXP res;
+    X509 *cert;
+    BIO  *mem = BIO_new(BIO_s_mem());
+    long len;
+    char *txt = 0;
+    PKI_init();
+    cert = retrieve_cert(sCert, "");
+    if (X509_NAME_print_ex(mem, X509_get_subject_name(cert), 0, (XN_FLAG_ONELINE | ASN1_STRFLGS_UTF8_CONVERT) & ~ASN1_STRFLGS_ESC_MSB) < 0) {
+      BIO_free(mem);
+	Rf_error("X509_NAME_print_ex failed with %s", ERR_error_string(ERR_get_error(), NULL));
+    }
+    len = BIO_get_mem_data(mem, &txt);
+    if (len < 0) {
+      BIO_free(mem);
+      Rf_error("cannot get memory buffer, %s", ERR_error_string(ERR_get_error(), NULL));
+    }
+    res = PROTECT(allocVector(STRSXP, 1));
+    SET_STRING_ELT(res, 0, mkCharLenCE(txt, len, CE_UTF8));
+    UNPROTECT(1);
+    BIO_free(mem);
+    return res;
+}
