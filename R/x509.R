@@ -20,8 +20,16 @@ PKI.load.cert <- function(what, format = c("PEM", "DER"), file) {
     .Call(PKI_load_DER_X509, what)
 }
 
-PKI.verifyCA <- function(certificate, ca) .Call(PKI_verify_cert, ca, certificate)
+PKI.verifyCA <- function(certificate, ca, default=FALSE, partial=FALSE)
+    .Call(PKI_verify_cert, ca, certificate, default, partial)
 
 PKI.pubkey <- function(certificate) .Call(PKI_cert_public_key, certificate)
 
 PKI.get.subject <- function(certificate) .Call(PKI_get_subject, certificate)
+
+PKI.get.cert.info <- function(certificate) {
+  i <- .Call(PKI_get_cert_info, certificate)
+  names(i) <- c("subject", "issuer", "fingerprint", "validity", "ca")
+  i[[4]] <- .POSIXct(i[[4]])
+  i
+}

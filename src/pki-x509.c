@@ -82,7 +82,7 @@ static X509 *retrieve_cert(SEXP obj, const char *c_name) {
     return cacrt;
 }
 
-SEXP PKI_verify_cert(SEXP sCA, SEXP sCert) {
+SEXP PKI_verify_cert(SEXP sCA, SEXP sCert, SEXP sDefault, SEXP sPart) {
     X509 *cert;
     X509_STORE *store;
     X509_STORE_CTX *ctx;
@@ -90,15 +90,49 @@ SEXP PKI_verify_cert(SEXP sCA, SEXP sCert) {
     PKI_init();
     cert = retrieve_cert(sCert, "");
     store = X509_STORE_new();
+
+    if (Rf_asInteger(sDefault) > 0)
+	X509_STORE_set_default_paths(store);
+
+    /* highly recommended (and default since OpenSSL 1.1.0) to avoid
+       breakage of chains like the famous Let's Encrypt 2021 sanfu
+       or Sectigo */
+    X509_STORE_set_flags(store, X509_V_FLAG_TRUSTED_FIRST);
+
+    if (Rf_asInteger(sPart) > 0)
+	X509_STORE_set_flags(store, X509_V_FLAG_PARTIAL_CHAIN);
+
     if (TYPEOF(sCA) == VECSXP) {
 	int i;
 	for (i = 0; i < LENGTH(sCA); i++)
 	    X509_STORE_add_cert(store, retrieve_cert(VECTOR_ELT(sCA, i),"CA "));
-    } else
+    } else if (sCA != R_NilValue)
 	X509_STORE_add_cert(store, retrieve_cert(sCA, "CA "));
+
     ctx = X509_STORE_CTX_new();
     X509_STORE_CTX_init(ctx, store, cert, NULL);
     rv = X509_verify_cert(ctx);
+
+#if 0 /* we could print of even return the chain, this is how ... */
+    {
+	int j;
+
+	STACK_OF(X509) *chain = X509_STORE_CTX_get1_chain(ctx);
+	int num_untrusted = X509_STORE_CTX_get_num_untrusted(ctx);
+	Rprintf("Chain:\n");
+	for (j = 0; j < sk_X509_num(chain); j++) {
+	    X509 *cert = sk_X509_value(chain, j);
+	    X509_NAME *sname = X509_get_subject_name(cert);
+	    char buf[256];
+	    Rprintf("depth=%d: %s", j, X509_NAME_oneline(sname, buf, sizeof(buf) - 1));
+	    if (j < num_untrusted)
+		Rprintf(" (untrusted)");
+	    Rprintf("\n");
+	}
+	sk_X509_pop_free(chain, X509_free);
+    }
+#endif
+
     X509_STORE_CTX_free(ctx);
     X509_STORE_free(store);
     return ScalarLogical((rv == 1) ? TRUE : FALSE);
@@ -277,6 +311,7 @@ static EVP_CIPHER_CTX *get_cipher(SEXP sKey, SEXP sCipher, int enc, int *transie
     }
 }
 
+#if 0
 static void PKI_free_cipher(SEXP sCipher) {
     EVP_CIPHER_CTX *ctx = (EVP_CIPHER_CTX*) R_ExternalPtrAddr(sCipher);
     if (ctx)
@@ -284,7 +319,7 @@ static void PKI_free_cipher(SEXP sCipher) {
 }
 
 /* FIXME: this is exposed as C symbol but not actually used anywhere ... ?!? */
-#if 0 /* it is not longer registered anyway ... */
+/* it is not longer registered anyway ... */
 SEXP PKI_sym_cipher(SEXP sKey, SEXP sCipher, SEXP sEncrypt, SEXP sIV) {
     SEXP res;
     int transient_cipher = 0;
@@ -681,17 +716,70 @@ SEXP PKI_get_subject(SEXP sCert) {
     PKI_init();
     cert = retrieve_cert(sCert, "");
     if (X509_NAME_print_ex(mem, X509_get_subject_name(cert), 0, (XN_FLAG_ONELINE | ASN1_STRFLGS_UTF8_CONVERT) & ~ASN1_STRFLGS_ESC_MSB) < 0) {
-      BIO_free(mem);
+	BIO_free(mem);
 	Rf_error("X509_NAME_print_ex failed with %s", ERR_error_string(ERR_get_error(), NULL));
     }
     len = BIO_get_mem_data(mem, &txt);
     if (len < 0) {
-      BIO_free(mem);
-      Rf_error("cannot get memory buffer, %s", ERR_error_string(ERR_get_error(), NULL));
+	BIO_free(mem);
+	Rf_error("cannot get memory buffer, %s", ERR_error_string(ERR_get_error(), NULL));
     }
     res = PROTECT(allocVector(STRSXP, 1));
     SET_STRING_ELT(res, 0, mkCharLenCE(txt, len, CE_UTF8));
     UNPROTECT(1);
     BIO_free(mem);
+    return res;
+}
+
+#include <time.h>
+
+static char cibuf[512];
+
+static double ASN1_TIME2d(const ASN1_TIME* time) {
+    int pday, psec;
+    ASN1_TIME *epoch;
+    double d;
+
+    epoch = ASN1_TIME_set(0, 0);
+    ASN1_TIME_diff(&pday, &psec, epoch, time);
+    ASN1_STRING_free(epoch);
+
+    d = (double) pday;
+    d *= 86400.0;
+    d += (double) psec;
+    return d;
+}
+
+SEXP PKI_get_cert_info(SEXP sCert) {
+#define FPLEN 20 /* size of the fingerprint - here SHA1 */
+    const EVP_MD *digest = EVP_sha1();
+    SEXP res = PROTECT(Rf_allocVector(VECSXP, 5));
+    int rc;
+    unsigned len;
+    X509 *cert;
+    double *ts;
+    PKI_init();
+    cert = retrieve_cert(sCert, "");
+    cibuf[sizeof(cibuf) - 1] = 0;
+    *cibuf = 0;
+    X509_NAME_oneline(X509_get_subject_name(cert), cibuf, sizeof(cibuf) - 1);
+    SET_VECTOR_ELT(res, 0, Rf_mkString(cibuf));
+    X509_NAME_oneline(X509_get_issuer_name(cert), cibuf, sizeof(cibuf) - 1);
+    SET_VECTOR_ELT(res, 1, Rf_mkString(cibuf));
+
+    len = FPLEN;
+    rc = X509_digest(cert, digest, (unsigned char*) cibuf, &len);
+    if (rc && len == FPLEN) {
+	SEXP sFP;
+	SET_VECTOR_ELT(res, 2, (sFP = allocVector(RAWSXP, len)));
+	memcpy(RAW(sFP), cibuf, len);
+    }
+
+    ts = REAL(SET_VECTOR_ELT(res, 3, Rf_allocVector(REALSXP, 2)));
+    ts[0] = ASN1_TIME2d(X509_get_notBefore(cert));
+    ts[1] = ASN1_TIME2d(X509_get_notAfter(cert));
+
+    SET_VECTOR_ELT(res, 4, Rf_ScalarLogical(X509_check_ca(cert)));
+    UNPROTECT(1);
     return res;
 }
