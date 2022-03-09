@@ -1,4 +1,4 @@
-39034df4b2000aa8d7ccfd15a5c98791 *DESCRIPTION
+03bfe89f611d289cde45561cdde583a4 *DESCRIPTION
 a4b346ec6e50330e73bda3a31662085c *LICENSE
 92f73cf9fb719ce8fba37ae34c183bb6 *NAMESPACE
 5c4f6d4db95287cea53164891059c7fa *NEWS
@@ -29,7 +29,7 @@ f096bc859bdf5812fe3d9bee86861bef *man/RSA.Rd
 53ccb724fc2f3ee1c122d69f27317398 *man/oid.Rd
 16ac0bff82bbf64f9f645f1fb38748cc *man/raw2hex.Rd
 c733862ac29e8bbd01a49b5ac7d4a780 *src/Makevars.in
-6b81aa06cdb1fcb439e2e8f07a124d84 *src/Makevars.win
+84f3c3174459e942b9c12bf475435aec *src/Makevars.win
 8def67d28dfdf9d5cf22d011f3f5945c *src/asn1.c
 cd0f24df06bdec9b70931bca30f58569 *src/config.h.in
 f986a70575a603c35a5380f4b6bc9a62 *src/init.c
