@@ -1,7 +1,7 @@
-04f64ebbe4fcd208c75a3f253cd5c726 *DESCRIPTION
+4de27ae15e3212ebc067c02508e4bc64 *DESCRIPTION
 a4b346ec6e50330e73bda3a31662085c *LICENSE
-de5b665db50274933fa60b90abc0b17c *NAMESPACE
-b6e0d567464631bdf6bf29f5f3ee495a *NEWS
+c5be4f75fb3b15ace5bb0e8be292f0bc *NAMESPACE
+f3789483a39fd5ac57f9054bcaf2ae44 *NEWS
 218b75ce9b65515f04a6d8719d1b8f2b *R/asn1.R
 a291e19951c99df7b2576753215d6aee *R/crypt.R
 069f949d073013b70c6b480a05bd8cd5 *R/digest.R
@@ -10,8 +10,8 @@ f49936b832996d246392d8f398047a3f *R/oid.R
 0bbd138515197f4600fa45c7c9495864 *R/pgp.R
 2f39ac252e623a993a77a52c2acb329a *R/print.R
 66c7100471185596f14a7732d925e6b6 *R/rsa.R
-36b43168c43e20ccdffa9a765c01ee42 *R/signR.R
-5dd0b03474b801cb19a20d0d2d284fc0 *R/tools.R
+6f3f412af5d70eafbac0672ed4f7961f *R/signR.R
+efb9ae3081f75d4169c963b7788264eb *R/tools.R
 ed93e3d4ef3dd4db057393379159d3be *R/x509.R
 29420506a5bf8c47914e9ebd99ad3cf8 *configure
 4b44b68f608960db3951c3252817b7ea *configure.ac
@@ -21,6 +21,7 @@ f0cd0d0038a86b27e787d8d34c0ffd7a *man/ASN1.Rd
 436fc5111af4beb58c0614dfbd03eb89 *man/BIGNUMint.Rd
 383f8fed8d8bbcc84c06d2bfaf90c860 *man/PKI.crypt.Rd
 40b718a0ebfb85061734f2a9bd979d8c *man/PKI.digest.Rd
+e30e52bf05f45f347e29c7df014a3f92 *man/PKI.genpass.Rd
 050efec8e0300989b7e81a8c68d429ce *man/PKI.info.Rd
 a58d719c5a7a96e756ab13031baa883c *man/PKI.random.Rd
 1fb482aca66e82f8e114844fc02e5bd8 *man/PKI.sign.Rd
@@ -31,13 +32,13 @@ f096bc859bdf5812fe3d9bee86861bef *man/RSA.Rd
 16ac0bff82bbf64f9f645f1fb38748cc *man/raw2hex.Rd
 c733862ac29e8bbd01a49b5ac7d4a780 *src/Makevars.in
 84f3c3174459e942b9c12bf475435aec *src/Makevars.win
-adc59b9fd168b799e13a5bbcc8fd82e2 *src/asn1.c
+2d4ade3a3b81285867709634b2d19fba *src/asn1.c
 cd0f24df06bdec9b70931bca30f58569 *src/config.h.in
 4d2b8ec6a976a2a1aad8081975e27078 *src/init.c
 b65b4c2e6523ae43420c742820d253b3 *src/pem.c
 c1ec6f7df5dd97ff0ecd4e396c96ae56 *src/pgp.c
-a7f8b5cedad3c3a8175078d017878c0f *src/pki-x509.c
-948ee1d8f06de123e47bc34b77e6fdc7 *src/pki.h
+e7fb6b1a9475387556d127dfff21d54c *src/pki-x509.c
+393538b97c58068a360bbc624d215c64 *src/pki.h
 a9643092c6558e4f34da887a47183caa *src/register.c
 2dec5e64316500969651ac67939fad13 *src/tools.c
 c8fb695cba446416df3ecb00dd42dca3 *tests/test.R

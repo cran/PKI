@@ -1,5 +1,5 @@
 Package: PKI
-Version: 0.1-12
+Version: 0.1-14
 Title: Public Key Infrastucture for R Based on the X.509 Standard
 Author: Simon Urbanek <Simon.Urbanek@r-project.org>
 Maintainer: Simon Urbanek <Simon.Urbanek@r-project.org>
@@ -11,6 +11,6 @@ URL: http://www.rforge.net/PKI
 SystemRequirements: OpenSSL library and headers (openssl-dev or
         similar)
 NeedsCompilation: yes
-Packaged: 2022-11-27 21:31:15 UTC; rforge
+Packaged: 2024-06-15 19:22:05 UTC; rforge
 Repository: CRAN
-Date/Publication: 2022-11-28 07:32:03 UTC
+Date/Publication: 2024-06-15 19:40:02 UTC
